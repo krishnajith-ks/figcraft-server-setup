@@ -1,5 +1,11 @@
 function fig-server --description "Control the FigCraft collaboration server"
     set -l bin ~/figcraft/target/release/figcraft-server
+    if not test -x $bin
+        if test -x ~/.local/bin/figcraft-server
+            set bin ~/.local/bin/figcraft-server
+        end
+    end
+
     set -l data ~/figcraft/figcraft-data
     set -l config ~/figcraft/figcraft-data/server.toml
     set -l unit figcraft-server
@@ -70,7 +76,7 @@ function fig-server --description "Control the FigCraft collaboration server"
                 echo "   LAN    : ws://$ip:47900/"
                 test -n "$ts_ip"; and echo "   VPN    : ws://$ts_ip:47900/"
                 echo "   Health : http://127.0.0.1:47900/healthz"
-                echo "   Use 'fig-server log' to view logs, 'fig-server stop' to shutdown."
+                echo "   Capacity: Up to 256 simultaneous editors in real-time"
             else
                 echo "❌ Server failed to start. Checking journal logs:"
                 journalctl --user -u $unit -n 10 --no-pager
@@ -106,6 +112,7 @@ function fig-server --description "Control the FigCraft collaboration server"
                 echo "   PID      : $pid"
                 echo "   RAM      : $mem_mb MB (Max cap: 256 MB)"
                 echo "   Health   : "(curl -sf --max-time 1 http://127.0.0.1:47900/healthz 2>/dev/null; or echo "unreachable")
+                echo "   Capacity : Up to 256 editors simultaneously"
                 echo "   LAN      : ws://$ip:47900/"
                 test -n "$ts_ip"; and echo "   VPN      : ws://$ts_ip:47900/"
             else
@@ -143,9 +150,11 @@ function fig-server --description "Control the FigCraft collaboration server"
             $bin --config $config files list $argv
 
         case link
+            # Usage: fig-server link [edit|view] [FILE_ID] [LABEL]
             set -l access edit
             test -n "$argv[1]"; and set access $argv[1]
             set -l id $argv[2]
+            set -l label $argv[3]
             if test -z "$id"
                 set id ($bin --config $config files list | string match -r -m1 '[0-9a-f]{16}')
             end
@@ -153,7 +162,24 @@ function fig-server --description "Control the FigCraft collaboration server"
                 echo "❌ No file found — publish one first via FigCraft app (File ▸ Publish to server…)"
                 return 1
             end
-            $bin --config $config links create $id --access $access
+            if test -n "$label"
+                $bin --config $config links create $id --access $access --label "$label"
+            else
+                $bin --config $config links create $id --access $access
+            end
+
+        case invite
+            # Shortcut: fig-server invite [FRIEND_NAME]
+            # Generates an edit link specifically labeled for a friend
+            set -l friend_name $argv[1]
+            test -z "$friend_name"; and set friend_name "Friend"
+            set -l id ($bin --config $config files list | string match -r -m1 '[0-9a-f]{16}')
+            if test -z "$id"
+                echo "❌ No file found — publish one first via FigCraft app (File ▸ Publish to server…)"
+                return 1
+            end
+            echo "🔗 Generating real-time edit link for $friend_name..."
+            $bin --config $config links create $id --access edit --label "$friend_name"
 
         case links
             set -l id $argv[1]
@@ -222,12 +248,13 @@ function fig-server --description "Control the FigCraft collaboration server"
             echo "    ram                RAM monitor (system + server cgroup)"
             echo "    log                Tail live logs"
             echo ""
-            echo "  SHARING"
+            echo "  SHARING (Up to 256 editors simultaneously)"
             echo "    key                Print server key URL (paste into FigCraft to publish)"
             echo "    files              List published files"
-            echo "    link [edit|view] [FILE_ID]   Create a share link (auto-uses Tailscale IP)"
-            echo "    links [FILE_ID]              List all links for a file"
-            echo "    revoke FILE_ID LINK_ID       Revoke a link"
+            echo "    link [edit|view]   Create a share link"
+            echo "    invite [NAME]      Create a labeled edit link for a specific friend"
+            echo "    links [FILE_ID]    List all links for a file"
+            echo "    revoke FILE LINK   Revoke a link"
             echo ""
             echo "  BACKUP & GITHUB SYNC"
             echo "    backup             Snapshot data directory locally (stop server first)"
