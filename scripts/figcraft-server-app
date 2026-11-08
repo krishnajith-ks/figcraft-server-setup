@@ -5,22 +5,34 @@
 
 set -e
 
-DEFAULT_FILE="/home/jojo/Downloads/sb.fig"
-TARGET_FILE="${1:-$DEFAULT_FILE}"
-
-# Locate FigCraft binary
-if [ -x "/home/jojo/ArtCraft/figcraft-0.16.0-linux-x86_64.AppImage" ]; then
-    FIGCRAFT_BIN="/home/jojo/ArtCraft/figcraft-0.16.0-linux-x86_64.AppImage"
-elif command -v figcraft >/dev/null 2>&1; then
-    FIGCRAFT_BIN="$(command -v figcraft)"
+# Default file if none provided (checks common locations)
+if [ -n "$1" ]; then
+    TARGET_FILE="$1"
+elif [ -f "$HOME/Downloads/sb.fig" ]; then
+    TARGET_FILE="$HOME/Downloads/sb.fig"
 else
-    FIGCRAFT_BIN="/usr/bin/figcraft"
+    TARGET_FILE=""
 fi
 
-# Cleanup on exit
+# Locate FigCraft binary dynamically
+if command -v figcraft >/dev/null 2>&1; then
+    FIGCRAFT_BIN="$(command -v figcraft)"
+elif compgen -G "$HOME/ArtCraft/*figcraft*.AppImage" >/dev/null 2>&1; then
+    FIGCRAFT_BIN="$(compgen -G "$HOME/ArtCraft/*figcraft*.AppImage" | head -n 1)"
+elif compgen -G "$HOME/*figcraft*.AppImage" >/dev/null 2>&1; then
+    FIGCRAFT_BIN="$(compgen -G "$HOME/*figcraft*.AppImage" | head -n 1)"
+else
+    FIGCRAFT_BIN="figcraft"
+fi
+
+# Cleanup handler on exit
 cleanup() {
     echo "FigCraft session ended. Stopping collab server..."
-    /usr/bin/fish -c "fig-server stop" >/dev/null 2>&1 || true
+    if command -v fish >/dev/null 2>&1; then
+        fish -c "fig-server stop" >/dev/null 2>&1 || true
+    else
+        pkill -x figcraft-server >/dev/null 2>&1 || true
+    fi
     if command -v notify-send >/dev/null 2>&1; then
         notify-send -i ai.storyteller.figcraft "FigCraft Collab Server" "Server stopped cleanly."
     fi
@@ -28,9 +40,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Start collaboration server in background via fish function
-/usr/bin/fish -c "fig-server start-bg" >/dev/null 2>&1 || true
+if command -v fish >/dev/null 2>&1; then
+    fish -c "fig-server start-bg" >/dev/null 2>&1 || true
+fi
 
-# Wait briefly for server healthz
+# Wait briefly for server health check
 for i in {1..10}; do
     if curl -sf --max-time 1 http://127.0.0.1:47900/healthz >/dev/null 2>&1; then
         break
@@ -38,15 +52,19 @@ for i in {1..10}; do
     sleep 0.2
 done
 
-# Grab Tailscale IP for the notification
-TS_IP=$(tailscale ip -4 2>/dev/null || echo "192.168.20.5")
+# Detect current IP address (Tailscale preferred, fallback to LAN)
+HOST_IP=$(tailscale ip -4 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || echo "127.0.0.1")
 
 if command -v notify-send >/dev/null 2>&1; then
-    notify-send -i ai.storyteller.figcraft "FigCraft Collab Server" "🟢 Server online!\nTailscale: ws://${TS_IP}:47900/\nOpening $(basename "$TARGET_FILE")..."
+    if [ -n "$TARGET_FILE" ] && [ -f "$TARGET_FILE" ]; then
+        notify-send -i ai.storyteller.figcraft "FigCraft Collab Server" "🟢 Server online!\nAddress: ws://${HOST_IP}:47900/\nLoading $(basename "$TARGET_FILE")..."
+    else
+        notify-send -i ai.storyteller.figcraft "FigCraft Collab Server" "🟢 Server online!\nAddress: ws://${HOST_IP}:47900/"
+    fi
 fi
 
-# Launch FigCraft with the target file (blocks until window is closed)
-if [ -f "$TARGET_FILE" ]; then
+# Launch FigCraft (blocks until window is closed)
+if [ -n "$TARGET_FILE" ] && [ -f "$TARGET_FILE" ]; then
     "$FIGCRAFT_BIN" "$TARGET_FILE"
 else
     "$FIGCRAFT_BIN"

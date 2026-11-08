@@ -1,102 +1,165 @@
-# figcraft-server-setup
+# FigCraft Collaboration Server — Complete Setup & Guide
 
-Personal setup for running a [FigCraft](https://github.com/storytold/figcraft) collaboration server on **CachyOS (Arch Linux)** with **fish shell**.
-
-FigCraft is an open-source, Rust-based interface design/prototyping app. `figcraft-server` is its self-hosted real-time collaboration backend.
+A universal, production-ready setup for running a self-hosted [FigCraft](https://github.com/storytold/figcraft) real-time collaboration server on Linux with **fish shell**, **Tailscale**, **systemd**, and **GitHub**.
 
 ---
 
-## What's in this repo
+## 📖 Architecture & How It Works
 
-| Path | Purpose |
-|---|---|
-| `config/fig-server.fish` | Fish function — full server control with RAM monitoring |
-| `config/figcraft-server.service` | systemd user service (optional auto-start) |
-| `config/server.toml.example` | Example server config (Tailscale / LAN public_url) |
-| `docs/setup-guide.md` | Full setup guide with GitHub integration |
-| `docs/chat-notes.md` | Original session notes |
-| `scripts/init-data-repo.fish` | One-shot script to init the data git repo |
+FigCraft is a pure Rust, clean-room interface design application (similar to Figma) with local-first storage. It operates across two primary components:
+
+```mermaid
+flowchart TD
+    subgraph Client ["Client Devices (You & Friends)"]
+        UI1["Host FigCraft Desktop App"]
+        UI2["Friend FigCraft Desktop App"]
+    end
+
+    subgraph Network ["Encrypted Network Layer"]
+        TS["Tailscale VPN Mesh / Local LAN (Port 47900)"]
+    end
+
+    subgraph Server ["Collaboration Server (Self-Hosted)"]
+        FS["figcraft-server (Rust Engine)"]
+        CG["systemd cgroup (256 MB Hard RAM Cap)"]
+        DATA[("Data Directory<br/>~/figcraft/figcraft-data/")]
+    end
+
+    UI1 <-->|"WebSocket (ws://...)"| TS
+    UI2 <-->|"WebSocket (ws://...)"| TS
+    TS <--> FS
+    FS --- CG
+    FS <--> DATA
+```
+
+1. **The Desktop Editor (`figcraft`)**: The graphical app used to create, draw, and prototype interfaces.
+2. **The Collab Server (`figcraft-server`)**: A lightweight native daemon that manages rooms, relays cursor chat, cursor movements, and synchronizes vector operations in real-time.
+3. **RAM Guardrail**: Runs under a transient systemd cgroup capping total memory usage to **256 MB**. The server typically consumes only 5–15 MB RSS at rest.
+4. **Network Privacy**: Operates behind your private Tailscale VPN. No open public router ports or CGNAT headaches required.
 
 ---
 
-## Quick start
+## 📂 Where Files Are Stored
 
-### Prerequisites
-
-```fish
-sudo pacman -S github-cli tailscale
-gh auth login
-git config --global user.name "krishnajith-ks"
-git config --global user.email "YOUR_GITHUB_EMAIL"
+All persistent server state lives in:
+```
+~/figcraft/figcraft-data/
+├── server.key           # MASTER KEY: Grants full admin & publishing access (DO NOT SHARE)
+├── server.json          # Server runtime state & active port
+├── server.toml          # Server network configuration (listen address & public_url)
+├── LOCK                 # Single-instance file lock (prevents dual-server corruption)
+└── files/
+    └── <16-hex-file-id>/
+        ├── snapshot.bin # Latest compacted snapshot of canvas nodes
+        ├── log.bin      # Incremental change log between snapshots
+        ├── links.json   # Hashed tokens for active edit/view links
+        └── meta.json    # File title, creation date, size, and owners
 ```
 
-### Install the fish function
-
-```fish
-cp config/fig-server.fish ~/.config/fish/functions/
-# or: source config/fig-server.fish
-```
-
-### Start the server
-
-```fish
-fig-server start      # foreground
-fig-server start-bg   # background (256 MB RAM cap)
-fig-server status     # check health + RAM usage
-```
-
-### Get a share link
-
-```fish
-fig-server key        # print server key (for publishing from the app)
-fig-server link       # edit link
-fig-server link view  # view-only link
-```
+> [!IMPORTANT]
+> The server stores files in its internal streaming format (`snapshot.bin` + `log.bin`). While inside a session, you can export a standard standalone `.figcraft` document anytime via **File ▸ Save** in the desktop app.
 
 ---
 
-## RAM management
+## 👥 How to Invite Friends (Live Real-Time Editing)
 
-The server typically uses **5–30 MB** at rest. The fish function enforces a **256 MB hard cap** via `systemd-run --scope -p MemoryMax=256M` — the kernel OOM-kills the server if it exceeds this, so it can never starve your desktop.
+### Step 1: Friend Joins Your Tailscale Network
+Have your friend install Tailscale on their computer and join your Tailscale tailnet (or share your machine using [Tailscale Node Sharing](https://tailscale.com/kb/1084/sharing)).
 
-Check it any time:
+### Step 2: Publish Your File to Your Server
+1. In your FigCraft desktop app, open your design file (e.g., `sb.fig`).
+2. Run in terminal:
+   ```fish
+   fig-server key
+   ```
+   *Copy the output URL: `ws://<your-tailscale-ip>:47900/?key=<your-key>`*
+3. In the FigCraft app, click **File ▸ Publish to server…**, paste that address, and click **Publish**.
 
+### Step 3: Generate and Share the Join Link
+Run:
 ```fish
-fig-server ram     # system + server breakdown
-fig-server status  # includes current RSS
+fig-server link          # Generates an edit link
+fig-server link view     # Generates a read-only link
 ```
 
-Your system already has:
-- `zram0` (zstd, 7.5 GB compressed swap) — excellent, keeps things fast under pressure
-- `systemd-oomd` running — kills cgroups that go over their limit before the global OOM fires
+Send the resulting link (e.g. `figcraft://join?host=100.x.x.x:47900&file=...&token=...`) to your friend. When they click it or paste it into **Share ▸ Join with a code**, both of you will see each other's live cursors and edits instantly!
 
 ---
 
-## Remote access (Tailscale)
+## 🔄 Multi-Host Replication (Friend Runs the SAME Server)
 
-```fish
-sudo systemctl enable --now tailscaled
-sudo tailscale up          # browser login
-tailscale ip -4            # get your Tailscale IP
+If you turn off your PC and your friend wants to host the **exact same server with the exact same files and edit history**, use the **Data Repository Handoff Pattern**:
+
+```mermaid
+sequenceDiagram
+    participant You as Your Computer
+    participant GH as Private GitHub Repo (figcraft-data)
+    participant Friend as Friend's Computer
+
+    Note over You: Finish working
+    You->>You: fig-server stop
+    You->>GH: fig-server push
+    Note over Friend: Ready to work (Your PC is off)
+    Friend->>GH: fig-server pull
+    Friend->>Friend: fig-server start-bg
+    Note over Friend: Works on files, updates persist
+    Friend->>Friend: fig-server stop
+    Friend->>GH: fig-server push
+    Note over You: You turn PC back on
+    You->>GH: fig-server pull
+    You->>You: fig-server start-bg
 ```
 
-Then update `server.toml` so links use the VPN address:
-
-```fish
-set ts_ip (tailscale ip -4)
-printf 'listen = "0.0.0.0:47900"\ndata = "/home/jojo/figcraft/figcraft-data"\npublic_url = "ws://%s:47900/"\n' $ts_ip \
-    > ~/figcraft/figcraft-data/server.toml
-```
-
-After this, `fig-server link` automatically uses the Tailscale IP instead of the LAN IP.
+### Initial Setup on Friend's PC:
+1. Clone this setup repository:
+   ```fish
+   git clone https://github.com/<your-username>/figcraft-server-setup ~/figcraft-server-setup
+   cp ~/figcraft-server-setup/config/fig-server.fish ~/.config/fish/functions/
+   ```
+2. Clone your private data repository:
+   ```fish
+   git clone https://github.com/<your-username>/figcraft-data ~/figcraft/figcraft-data
+   ```
+3. Generate a local server key for them:
+   ```fish
+   ~/figcraft/target/release/figcraft-server --data ~/figcraft/figcraft-data key
+   ```
+4. Update `~/figcraft/figcraft-data/server.toml` with their Tailscale IP:
+   ```fish
+   set ts_ip (tailscale ip -4)
+   printf 'listen = "0.0.0.0:47900"\ndata = "%s/figcraft/figcraft-data"\npublic_url = "ws://%s:47900/"\n' $HOME $ts_ip > ~/figcraft/figcraft-data/server.toml
+   ```
 
 ---
 
-## Two-repo layout
+## 🔒 Security & Privacy Best Practices
 
-| Repo | Contents | Privacy |
-|---|---|---|
-| `figcraft-server-setup` (this repo) | Scripts, config, docs | Private |
-| `figcraft-data` | Server metadata snapshots | Private |
+- **Never commit `server.key`**: Whoever has this key can edit, publish, or purge any file on the server. The repo's `.gitignore` automatically excludes it.
+- **Never commit `figcraft-data/files/` directly to public git**: Design snapshots grow rapidly in size and contain unencrypted binary layers. Use private Git repos for data handoffs and `fig-server backup` for offline archives.
+- **Tailscale Isolation**: Because `public_url` points to a Tailscale IP, only devices authenticated to your private VPN can ever establish WebSocket connections.
 
-See `docs/setup-guide.md` for the full data-repo handoff pattern.
+---
+
+## ⚡ Quick Reference Commands
+
+```fish
+# Lifecycle
+fig-server start-bg        # Launch in background with 256 MB RAM cap
+fig-server status          # Check live health, RAM, PID, and addresses
+fig-server ram             # Full memory diagnostics (server + system)
+fig-server log             # Stream live journal logs
+fig-server stop            # Gracefully stop the server
+
+# Collaboration
+fig-server key             # Print master publishing URL
+fig-server files           # List all published files
+fig-server link            # Generate live edit invite link
+fig-server link view       # Generate live view invite link
+fig-server links <ID>      # List all active links for a file
+fig-server revoke <ID> <L> # Revoke an active link
+
+# Backup & Sync
+fig-server backup          # Local timestamped archive in ~/figcraft-backups/
+fig-server push            # Push metadata snapshot to GitHub
+fig-server pull            # Pull latest changes from GitHub
+```
