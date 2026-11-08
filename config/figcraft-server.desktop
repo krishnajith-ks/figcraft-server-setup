@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=FigCraft Server
+GenericName=Collaborative Interface Design
+Comment=Launch FigCraft with auto-managed collaboration server
+Exec=/home/jojo/.local/bin/figcraft-server-app %U
+Icon=ai.storyteller.figcraft
+Terminal=false
+StartupNotify=true
+StartupWMClass=ai.storyteller.figcraft
+Categories=Graphics;2DGraphics;VectorGraphics;X-Design;Network;
+Keywords=figcraft;figcraft-server;server;collab;design;interface;ui;ux;
+MimeType=application/x-figcraft;
