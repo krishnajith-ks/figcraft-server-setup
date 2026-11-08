@@ -1,0 +1,13 @@
+*.key
+*.token
+*.secret
+server.key
+.env
+figcraft-data/server.key
+figcraft-data/LOCK
+figcraft-data/server.json
+figcraft-data/files/
+*.tmp
+*.pid
+*.log
+figcraft-server.log

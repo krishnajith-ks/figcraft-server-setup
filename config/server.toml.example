@@ -1,0 +1,17 @@
+# Server config example
+# Copy to ~/figcraft/figcraft-data/server.toml and edit as needed.
+# The server picks this up automatically on start.
+
+listen = "0.0.0.0:47900"
+data   = "/home/jojo/figcraft/figcraft-data"
+
+# Uncomment ONE of these:
+
+# LAN only (default — links work on the same Wi-Fi)
+# public_url = "ws://192.168.20.5:47900/"
+
+# Tailscale (recommended — works from anywhere on your Tailscale network)
+# public_url = "ws://100.x.x.x:47900/"   # replace with: tailscale ip -4
+
+# Tailscale Funnel / Cloudflare Tunnel (public HTTPS)
+# public_url = "wss://your-tunnel.example.com/"
